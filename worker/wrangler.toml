@@ -1,0 +1,10 @@
+name = "codex-reset-radar-api"
+main = "worker/index.js"
+compatibility_date = "2026-05-31"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[kv_namespaces]]
+binding = "RADAR_KV"
+id = "6526134a3b284374bbf9f193927a7833"
