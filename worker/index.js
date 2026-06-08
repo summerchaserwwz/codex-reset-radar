@@ -316,7 +316,9 @@ function parseRssSignals(xml, handle, feedUrl, sourceLabel) {
       const description = stripXml(readTag(body, "description") || readTag(body, "summary") || readTag(body, "content"));
       const link = stripXml(readTag(body, "link")) || readAtomLink(body);
       const pubDate = readTag(body, "pubDate") || readTag(body, "updated") || readTag(body, "published");
-      const combined = [title, description].filter(Boolean).join(" ");
+      const combined = description && title && description.includes(title)
+        ? description
+        : [title, description].filter(Boolean).join(" ");
       const text = combined.replace(/\s+/g, " ").trim();
       if (isWhitelistNotice(text)) return null;
       if (!isRelevant(text)) return null;

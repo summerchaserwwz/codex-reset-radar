@@ -405,6 +405,13 @@ function ProbabilityCurvePanel({ snapshot }: { snapshot: RadarSnapshot }) {
 }
 
 function StrongestSignal({ signal }: { signal: RadarSignal }) {
+  const sourceId = signal.sourceId.replace(/^@/, "");
+  const author = sourceId === "sama"
+    ? { name: "Sam Altman", handle: "@sama", avatar: "S" }
+    : sourceId === "thsottiaux" || sourceId === "tibo"
+      ? { name: "Tibo Sottiaux", handle: "@thsottiaux", avatar: "T" }
+      : { name: signal.sourceLabel ?? signal.sourceId, handle: signal.sourceId, avatar: "R" };
+
   return (
     <section className="panel signal-panel">
       <div className="panel-heading">
@@ -417,10 +424,10 @@ function StrongestSignal({ signal }: { signal: RadarSignal }) {
 
       <div className="x-thread-card">
         <div className="x-author">
-          <div className="x-avatar" aria-hidden="true">T</div>
+          <div className="x-avatar" aria-hidden="true">{author.avatar}</div>
           <div>
-            <strong>Tibo Sottiaux</strong>
-            <span>@thsottiaux 回复 @Trident2Gold</span>
+            <strong>{author.name}</strong>
+            <span>{author.handle} · {signal.sourceLabel ?? "X 信号"}</span>
           </div>
         </div>
         <blockquote>{signal.quote}</blockquote>
