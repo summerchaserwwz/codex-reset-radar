@@ -44,6 +44,7 @@ function formatFullTime(value: string) {
 function roleLabel(role?: string) {
   const labels: Record<string, string> = {
     future_reset_hint: "官方预告",
+    usage_program: "用量计划",
     issue_or_limit_anomaly: "限额异常",
     ambiguous_reset_chatter: "社群扩散"
   };
@@ -106,6 +107,75 @@ function probabilityTone(probability: number) {
   if (probability >= 70) return "hot";
   if (probability >= 35) return "watch";
   return "calm";
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatDateOnly(date: Date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Shanghai"
+  })
+    .format(date)
+    .replaceAll("/", "-");
+}
+
+function formatShortDate(date: Date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    timeZone: "Asia/Shanghai"
+  }).format(date);
+}
+
+function getResetWindow(snapshot: RadarSnapshot) {
+  const strongSignal = snapshot.signals.find((signal) => {
+    const text = `${signal.title} ${signal.quote ?? ""}`;
+    return (
+      snapshot.confidence >= 70 &&
+      signal.semanticRole === "future_reset_hint" &&
+      /tomorrow|明天|resetting the limits|i will reset|go \/fast/i.test(text)
+    );
+  });
+
+  if (!strongSignal) {
+    return {
+      active: false,
+      title: "暂无未来窗口",
+      description: "最近没有新的官方 reset / tomorrow / go /fast 强信号；当前只保持监控。",
+      cards: [
+        { label: "最近扫描", value: formatTime(snapshot.lastCheckedAt) },
+        { label: "下一次扫描", value: formatTime(snapshot.nextScanAt) },
+        { label: "窗口状态", value: "未开启" }
+      ]
+    };
+  }
+
+  const signalDate = new Date(strongSignal.detectedAt);
+  const targetDate = /tomorrow|明天/i.test(`${strongSignal.title} ${strongSignal.quote ?? ""}`)
+    ? addDays(signalDate, 1)
+    : signalDate;
+  const nextDate = addDays(targetDate, 1);
+  const target = formatDateOnly(targetDate);
+  const nextShort = formatShortDate(nextDate);
+  const targetShort = formatShortDate(targetDate);
+
+  return {
+    active: true,
+    title: `${target} 下午 - ${nextShort} 凌晨`,
+    description: "原话包含未来重置语义；这里按来源时区换算给中国用户看。",
+    cards: [
+      { label: "中国窗口", value: `${targetShort} 14:00-${nextShort} 03:00` },
+      { label: "按欧洲早上", value: `${targetShort} 14:00-18:00` },
+      { label: "按美西早上", value: `${targetShort} 23:00-${nextShort} 03:00` }
+    ]
+  };
 }
 
 function App() {
@@ -210,6 +280,7 @@ function RadarDashboard({ snapshot }: { snapshot: RadarSnapshot }) {
 function ForecastPanel({ snapshot }: { snapshot: RadarSnapshot }) {
   const advice = getAdvice(snapshot.confidence);
   const tone = probabilityTone(snapshot.confidence);
+  const resetWindow = getResetWindow(snapshot);
 
   return (
     <section className={`panel forecast-panel probability-${tone}`}>
@@ -235,24 +306,18 @@ function ForecastPanel({ snapshot }: { snapshot: RadarSnapshot }) {
       </div>
 
       <div className={`window-callout ${tone}`}>
-        <span>中国主观察</span>
-        <strong>2026-06-01 下午 - 06-02 凌晨</strong>
-        <p>原话是 “tomorrow morning”，不是北京时间早上；这里按来源时区换算给中国用户看。</p>
+        <span>{resetWindow.active ? "中国主观察" : "当前窗口"}</span>
+        <strong>{resetWindow.title}</strong>
+        <p>{resetWindow.description}</p>
       </div>
 
-      <div className="timezone-grid" aria-label="中美时差对照">
-        <div>
-          <span>中国窗口</span>
-          <strong>6/1 14:00-6/2 03:00</strong>
-        </div>
-        <div>
-          <span>按欧洲早上</span>
-          <strong>6/1 14:00-18:00</strong>
-        </div>
-        <div>
-          <span>按美西早上</span>
-          <strong>6/1 23:00-6/2 03:00</strong>
-        </div>
+      <div className="timezone-grid" aria-label={resetWindow.active ? "中美时差对照" : "监控状态"}>
+        {resetWindow.cards.map((card) => (
+          <div key={card.label}>
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+          </div>
+        ))}
       </div>
 
       <div className="hint-row">

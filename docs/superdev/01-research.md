@@ -10,9 +10,15 @@ X 没有官方 RSS。官方 X API v2 可用，但目前是 pay-per-use，需要�
 可落地的免费方案不是单个接口，而是“多源 RSS 探测 + 稳定 JSON 兜底”：
 
 1. 免费 RSS 实例池：FxTwitter/Nitter/XCancel/OpenRSS/RSSHub 自托管或公共实例，按可用性逐个探测。
-2. 公开 radar JSON：`https://codex-reset-radar.pages.dev/current.json`，当前最稳定，且已经抓到 Tibo 的最新强信号。
+2. 公开 radar JSON：`https://codexradar.com/current.json`，当前最稳定；`https://codex-reset-radar.pages.dev/current.json` 仍可作为同源镜像参考。
 3. 静态种子：所有上游失败时保底，避免页面空白。
 4. X API v2：保留可选增强，不要求用户配置 token。
+
+## 2026-06-08 复查
+
+`codex-reset-radar.pages.dev` 当前已经升级为 v2 聚合结构，和 `codexradar.com` 内容一致。它聚合了当前窗口、24/48h 概率、正负信号、最近窗口、RSS open/close alert、官方 X、社群 X、评论样本、OpenAI Status、市场叙事和 model_iq。
+
+我们的策略需要比它更严格：把“官方 reset 承诺”“个人 10X 用量奖励”“普通 Codex 热度”“个人 quota / weekly reset”分开权重，避免把热度或用量奖励误判成全体重置窗口。
 
 ## 官方 X API
 
@@ -139,7 +145,7 @@ https://x.com/thsottiaux/status/2060964284117782996
 
 `tomorrow morning` 不是北京时间早上。
 
-中国用户主观察窗口应展示为：
+2026-05-31 这次历史信号的中国用户观察窗口曾展示为：
 
 ```text
 2026-06-01 下午 - 2026-06-02 凌晨

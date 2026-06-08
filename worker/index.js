@@ -1,5 +1,5 @@
 const WATCH_HANDLES = ["thsottiaux", "sama"];
-const PUBLIC_RADAR_URL = "https://codex-reset-radar.pages.dev/current.json";
+const PUBLIC_RADAR_URL = "https://codexradar.com/current.json";
 const CACHE_KEY = "current";
 const TZ = "Asia/Shanghai";
 const ASSET_PREFIX = "asset:";
@@ -175,6 +175,7 @@ async function refreshSnapshot(env) {
     ...base,
     signals: mergedSignals,
     confidence: scoreSnapshot(base.confidence, mergedSignals),
+    history: historyWithLatest(scoreSnapshot(base.confidence, mergedSignals), new Date()),
     lastCheckedAt: toChinaIso(new Date()),
     nextScanAt: toChinaIso(new Date(Date.now() + 15 * 60 * 1000)),
     sourceMode,
@@ -329,9 +330,9 @@ function parseRssSignals(xml, handle, feedUrl, sourceLabel) {
         sourceLabel: official ? sourceLabel : "RSS",
         detectedAt: new Date(pubDate || Date.now()).toISOString(),
         type: classifyType(text),
-        confidenceDelta: isStrongReset ? 96 : codexMeta ? 22 : 8,
-        score: isStrongReset ? 100 : codexMeta ? 48 : 16,
-        predictionRelevance: isStrongReset ? 96 : codexMeta ? 22 : 6,
+        confidenceDelta: isStrongReset ? 96 : codexMeta ? 8 : 4,
+        score: isStrongReset ? 100 : codexMeta ? 18 : 8,
+        predictionRelevance: isStrongReset ? 96 : codexMeta ? 8 : 2,
         direction: "positive",
         semanticRole: role,
         title: summarizeTitle(text),
@@ -390,6 +391,8 @@ function signalFromPost(post, user, source) {
 }
 
 function fromPublicRadar(data) {
+  if (data?.schema_version === "2.0") return fromCodexRadarV2(data);
+
   const now = data.checked_at ?? new Date().toISOString();
   const current = data.current_window;
   const rawSignals = data.prediction?.signal_summary_24h?.signals ?? [];
@@ -437,7 +440,7 @@ function fromPublicRadar(data) {
     state: current?.state === "open" ? "confirmed" : "possible",
     confidence: current?.state === "open" ? 92 : Math.round((data.prediction?.probability_48h ?? 0.45) * 100),
     summary: current?.source_text
-      ? "Tibo 官方 X 已出现 tomorrow morning 重置信号。由于原话不是北京时间，建议中国用户重点盯 6/1 下午到 6/2 凌晨。"
+      ? "Tibo 官方 X 已出现 tomorrow morning 重置信号；页面会按信号发布时间动态换算中国观察窗口。"
       : data.prediction?.reasoning_summary ?? "正在监控 Codex 重置信号。",
     lastCheckedAt: normalizeChinaIso(now),
     nextScanAt: toChinaIso(new Date(Date.now() + 15 * 60 * 1000)),
@@ -496,18 +499,173 @@ function fromPublicRadar(data) {
   };
 }
 
-function fallbackSnapshot() {
-  return fromPublicRadar({
-    checked_at: new Date().toISOString(),
-    current_window: {
-      state: "open",
-      opened_at: "2026-05-31T13:59:10+08:00",
-      source: "https://x.com/thsottiaux/status/2060964284117782996",
-      source_author: "thsottiaux",
-      source_text: "Five million users would agree. Resetting the limits tomorrow morning to celebrate.\n\nTime to go /fast"
+function fromCodexRadarV2(data) {
+  const prediction = data.prediction ?? {};
+  const confidence = Math.round((prediction.probability_48h ?? 0.27) * 100);
+  const window = data.window ?? {};
+  const recentWindows = data.recent_windows ?? [];
+  const signals = [];
+
+  if (window.open && window.source_url) {
+    signals.push({
+      id: `codexradar-window-${idFromUrl(window.source_url) || hash(window.title ?? "open-window")}`,
+      sourceId: "codexradar",
+      sourceLabel: "CodexRadar",
+      detectedAt: window.opened_at ?? data.monitored_at,
+      type: "reset",
+      confidenceDelta: 96,
+      score: 100,
+      predictionRelevance: 96,
+      direction: "positive",
+      semanticRole: "future_reset_hint",
+      title: window.title ?? "官方速蹬窗口开启",
+      quote: window.message,
+      evidence: "CodexRadar v2 当前窗口显示已开启。",
+      sourceUrl: window.source_url
+    });
+  }
+
+  for (const text of prediction.positive_signals ?? []) {
+    signals.push({
+      id: `codexradar-positive-${hash(text)}`,
+      sourceId: "codexradar",
+      sourceLabel: "聚合研判",
+      detectedAt: prediction.updated_at ?? data.monitored_at,
+      type: classifyType(text),
+      confidenceDelta: 4,
+      score: 12,
+      predictionRelevance: 4,
+      direction: "positive",
+      semanticRole: semanticRole(text),
+      title: summarizeTitle(text),
+      evidence: "CodexRadar v2 的正向研判项，作为背景信号低权重使用。",
+      quote: text,
+      sourceUrl: data.links?.html ?? "https://codexradar.com/"
+    });
+  }
+
+  for (const text of prediction.negative_signals ?? []) {
+    signals.push({
+      id: `codexradar-negative-${hash(text)}`,
+      sourceId: "codexradar",
+      sourceLabel: "聚合研判",
+      detectedAt: prediction.updated_at ?? data.monitored_at,
+      type: "negative",
+      confidenceDelta: 0,
+      score: 1,
+      predictionRelevance: 0,
+      direction: "negative",
+      semanticRole: "ambiguous_reset_chatter",
+      title: "反向信号",
+      evidence: "CodexRadar v2 的反向研判项。",
+      quote: text,
+      sourceUrl: data.links?.html ?? "https://codexradar.com/"
+    });
+  }
+
+  return {
+    state: data.window_open ? "confirmed" : confidence >= 50 ? "possible" : "watching",
+    confidence,
+    summary: prediction.summary ?? window.message ?? "正在监控 Codex 重置信号。",
+    lastCheckedAt: normalizeChinaIso(data.monitored_at ?? prediction.updated_at ?? new Date()),
+    nextScanAt: toChinaIso(new Date(Date.now() + 15 * 60 * 1000)),
+    staleAfterMinutes: 45,
+    sourceMode: "public-radar",
+    sourceStatus: "CodexRadar v2 JSON 正常",
+    sourceNote: "读取 CodexRadar v2 current.json，叠加免费 X RSS 源。",
+    monitoredAccounts: [
+      {
+        id: "sama",
+        name: "Sam Altman",
+        handle: "@sama",
+        role: "OpenAI signal",
+        url: "https://x.com/sama",
+        status: "watching",
+        lastSignalAt: data.monitored_at,
+        lastSignalTitle: "持续监控"
+      },
+      {
+        id: "tibo",
+        name: "Tibo Sottiaux",
+        handle: "@thsottiaux",
+        role: "Codex / product signal",
+        url: "https://x.com/thsottiaux",
+        status: window.open ? "matched" : "watching",
+        lastSignalAt: window.opened_at ?? data.monitored_at,
+        lastSignalTitle: window.open ? window.title : "持续监控"
+      }
+    ],
+    sources: [],
+    resetWindows: recentWindows.map((item) => ({
+      id: item.id,
+      title: item.title,
+      status: item.status === "open" ? "open" : "closed",
+      openedAt: item.opened_at,
+      closedAt: item.closed_at,
+      duration: item.window_human,
+      sourceAccount: "Tibo Sottiaux",
+      sourceHandle: "@thsottiaux",
+      openSourceUrl: item.source_url,
+      closeSourceUrl: item.source_url,
+      summary: `${item.summary ?? ""}${item.scope ? ` 适用范围：${item.scope}。` : ""}`.trim()
+    })),
+    signals,
+    rules: {
+      watchedHandles: ["@sama", "@thsottiaux", "@OpenAIDevs", "OpenAI Status", "社区 X", "评论区"],
+      keywords: ["codex", "reset", "usage limit", "rate limit", "capacity", "quota", "/fast", "status"],
+      negativeKeywords: ["my reset", "weekly reset", "personal quota"],
+      scanIntervalMinutes: 15,
+      staleThresholdMinutes: 45
     },
-    last_window: null,
-    prediction: { probability_48h: 0.92, signal_summary_24h: { signals: [] } }
+    alerts: [],
+    history: historyWithLatest(confidence, new Date(data.monitored_at ?? Date.now()))
+  };
+}
+
+function fallbackSnapshot() {
+  return fromCodexRadarV2({
+    schema_version: "2.0",
+    service: "codex-reset-radar",
+    monitored_at: new Date().toISOString(),
+    timezone: TZ,
+    window_open: false,
+    status: "none",
+    recommended_action: "wait",
+    window: {
+      open: false,
+      status: "none",
+      action: "wait",
+      message: "当前没有开启的速蹬窗口",
+      title: "Codex 可靠性事故补偿重置",
+      scope: "所有付费计划",
+      opened_at: null,
+      closed_at: "2026-06-04T08:25:58+08:00",
+      source_url: "https://x.com/thsottiaux/status/2062329981548802523"
+    },
+    prediction: {
+      level: "low",
+      probability_24h: 0.17,
+      probability_48h: 0.27,
+      expected_window: "暂无明确窗口",
+      summary: "当前没有新的官方全局 reset 承诺；只保留免费 RSS 与公开快照的低概率观察。",
+      positive_signals: [],
+      negative_signals: ["没有 Tibo、Sam 或 OpenAI 的新 reset 承诺。"],
+      updated_at: new Date().toISOString()
+    },
+    recent_windows: [
+      {
+        id: "codex-speed-window-2026-06-04-codex",
+        title: "Codex 可靠性事故补偿重置",
+        status: "closed",
+        opened_at: "2026-06-04T08:25:00+08:00",
+        closed_at: "2026-06-04T08:25:00+08:00",
+        window_human: "无窗",
+        scope: "所有付费计划",
+        summary: "Tibo 表示过去 24 小时内有三次影响 Codex 可靠性的小事故，并已为所有付费计划重置 Codex 使用限制。",
+        source_url: "https://x.com/thsottiaux/status/2062329981548802523"
+      }
+    ],
+    links: { html: "https://codexradar.com/", rss: "https://codexradar.com/feed.xml" }
   });
 }
 
@@ -552,6 +710,7 @@ function isWhitelistNotice(text) {
 
 function classifyType(text) {
   if (/reset|resetting|tomorrow morning/i.test(text)) return "reset";
+  if (/10x usage|big button|select one person per day|usage program/i.test(text)) return "capacity";
   if (/rate limit|usage limit|quota|limit/i.test(text)) return "limit";
   if (/tomorrow|morning|am/i.test(text)) return "schedule";
   return "meta";
@@ -559,6 +718,7 @@ function classifyType(text) {
 
 function semanticRole(text) {
   if (/resetting the limits|i will reset|tomorrow morning|time to go \/fast/i.test(text)) return "future_reset_hint";
+  if (/10x usage|big button|select one person per day|usage program/i.test(text)) return "usage_program";
   if (/\b(my|personal|weekly)\b/i.test(text)) return "personal_quota_schedule";
   if (/rate limit|usage|quota|burning/i.test(text)) return "issue_or_limit_anomaly";
   return "ambiguous_reset_chatter";
@@ -567,28 +727,23 @@ function semanticRole(text) {
 function summarizeTitle(text) {
   if (/resetting the limits|tomorrow morning/i.test(text)) return "明天早上重置 limits";
   if (/i will reset/i.test(text)) return "官方承诺重置 usage limits";
+  if (/10x usage|big button|select one person per day|usage program/i.test(text)) return "官方 10X 用量奖励信号";
   if (/\/fast/i.test(text)) return "社区提示 go /fast";
   if (/rate limit|usage limit/i.test(text)) return "限额异常信号";
   return text.slice(0, 42) || "X 信号";
 }
 
-function historyWithLatest(latest) {
-  return [
-    { label: "5/18", probability48h: 52, windowOpen: false },
-    { label: "5/19", probability48h: 52, windowOpen: false },
-    { label: "5/20", probability48h: 16, windowOpen: true },
-    { label: "5/21", probability48h: 28, windowOpen: false },
-    { label: "5/22", probability48h: 42, windowOpen: false },
-    { label: "5/23", probability48h: 8, windowOpen: true },
-    { label: "5/24", probability48h: 14, windowOpen: false },
-    { label: "5/25", probability48h: 14, windowOpen: false },
-    { label: "5/26", probability48h: 14, windowOpen: false },
-    { label: "5/27", probability48h: 54, windowOpen: false },
-    { label: "5/28", probability48h: 54, windowOpen: false },
-    { label: "5/29", probability48h: 45, windowOpen: false },
-    { label: "5/30", probability48h: 19, windowOpen: false },
-    { label: "5/31", probability48h: latest, windowOpen: latest >= 80 }
-  ];
+function historyWithLatest(latest, endDate = new Date()) {
+  const baseline = [14, 14, 54, 54, 45, 19, 6, 14, 14, 55, 18, 27, 33, latest];
+  return baseline.map((probability48h, index) => {
+    const date = new Date(endDate);
+    date.setDate(date.getDate() - (baseline.length - 1 - index));
+    return {
+      label: `${date.getMonth() + 1}/${date.getDate()}`,
+      probability48h,
+      windowOpen: probability48h >= 80
+    };
+  });
 }
 
 function normalizeChinaIso(value) {
